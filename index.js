@@ -219,7 +219,7 @@ const parseHsl = (color) => {
     return hslToHex(h % 360, s, l);
 };
 
-export const normalizeColor = (color) => {
+const normalizeColor = (color) => {
     if (!color) return '#000000';
 
     if (color.startsWith('#')) {
