@@ -366,6 +366,148 @@ const parseOklch = (color) => {
     return oklabToHex(L_, a, b);
 };
 
+// --- CSS color() function: predefined RGB and XYZ spaces ---
+const mul3 = (M, v) => [
+    M[0][0] * v[0] + M[0][1] * v[1] + M[0][2] * v[2],
+    M[1][0] * v[0] + M[1][1] * v[1] + M[1][2] * v[2],
+    M[2][0] * v[0] + M[2][1] * v[1] + M[2][2] * v[2]
+];
+
+const srgbToLinear = (c) => {
+    const sign = c < 0 ? -1 : 1;
+    const abs = Math.abs(c);
+    if (abs <= 0.04045) return c / 12.92;
+    return sign * Math.pow((abs + 0.055) / 1.055, 2.4);
+};
+
+// Predefined RGB → linear → XYZ (D65 unless noted) → linear sRGB → sRGB
+const P3_TO_XYZ = [
+    [0.4865709486482162, 0.26566769316909306, 0.1982172851563645],
+    [0.2289745640697488, 0.6917385218365064, 0.079286914093745],
+    [0.0, 0.04511338185890264, 1.043944368900976]
+];
+const A98_TO_XYZ = [
+    [0.5766690429101305, 0.1855582379065463, 0.1882286462349947],
+    [0.2973449752505362, 0.6273635662554661, 0.07529145849399788],
+    [0.03106634059987123, 0.07569142150111955, 0.9913375368376388]
+];
+const PROPHOTO_TO_XYZ_D50 = [
+    [0.7977666449006423, 0.13518129740053308, 0.0313477341283922],
+    [0.2880748288194013, 0.711835234241873, 0.00008993693872564],
+    [0.0, 0.0, 0.8251046025104602]
+];
+const D50_TO_D65 = [
+    [0.955473421488075, -0.02309845494876471, 0.06325924320057072],
+    [-0.0283697093338637, 1.0099953980813041, 0.021041441191917323],
+    [0.012314014864481998, -0.020507649298898964, 1.330365926242124]
+];
+const REC2020_TO_XYZ = [
+    [0.6369580483012914, 0.1446169015862832, 0.1688809751641721],
+    [0.26270021201126703, 0.6779980715188708, 0.05930171646986196],
+    [0.0, 0.028072693049087428, 1.0609850577107912]
+];
+
+const linProPhoto = (c) => {
+    const sign = c < 0 ? -1 : 1;
+    const abs = Math.abs(c);
+    if (abs <= 16 / 512) return c / 16;
+    return sign * Math.pow(abs, 1.8);
+};
+const linA98 = (c) => {
+    const sign = c < 0 ? -1 : 1;
+    return sign * Math.pow(Math.abs(c), 563 / 256);
+};
+const REC2020_ALPHA = 1.09929682680944;
+const REC2020_BETA = 0.018053968510807;
+const lin2020 = (c) => {
+    const sign = c < 0 ? -1 : 1;
+    const abs = Math.abs(c);
+    if (abs < REC2020_BETA * 4.5) return c / 4.5;
+    return sign * Math.pow((abs + REC2020_ALPHA - 1) / REC2020_ALPHA, 1 / 0.45);
+};
+
+const linearRgbToHex = (r, g, b) => {
+    const rr = Math.round(linearRgbToSrgb(r) * 255);
+    const gg = Math.round(linearRgbToSrgb(g) * 255);
+    const bb = Math.round(linearRgbToSrgb(b) * 255);
+    return rgbToHex(
+        Math.max(0, Math.min(255, rr)),
+        Math.max(0, Math.min(255, gg)),
+        Math.max(0, Math.min(255, bb))
+    );
+};
+
+const colorSpaceToHex = (space, c1, c2, c3) => {
+    const clamp01 = (x) => Math.max(0, Math.min(1, x));
+    let r, g, b;
+    const spaceLower = space.toLowerCase();
+    if (spaceLower === 'srgb') {
+        r = clamp01(c1) * 255;
+        g = clamp01(c2) * 255;
+        b = clamp01(c3) * 255;
+        return rgbToHex(Math.round(r), Math.round(g), Math.round(b));
+    }
+    if (spaceLower === 'srgb-linear') {
+        const [lr, lg, lb] = [c1, c2, c3].map(clamp01);
+        return linearRgbToHex(lr, lg, lb);
+    }
+    if (spaceLower === 'display-p3') {
+        const lin = [c1, c2, c3].map((c) => srgbToLinear(clamp01(c)));
+        const [x, y, z] = mul3(P3_TO_XYZ, lin);
+        const [lr, lg, lb] = xyzToLinearRgb(x, y, z);
+        return linearRgbToHex(lr, lg, lb);
+    }
+    if (spaceLower === 'a98-rgb') {
+        const lin = [c1, c2, c3].map((c) => linA98(clamp01(c)));
+        const [x, y, z] = mul3(A98_TO_XYZ, lin);
+        const [lr, lg, lb] = xyzToLinearRgb(x, y, z);
+        return linearRgbToHex(lr, lg, lb);
+    }
+    if (spaceLower === 'prophoto-rgb') {
+        const lin = [c1, c2, c3].map((c) => linProPhoto(clamp01(c)));
+        const xyzD50 = mul3(PROPHOTO_TO_XYZ_D50, lin);
+        const xyzD65 = mul3(D50_TO_D65, xyzD50);
+        const [lr, lg, lb] = xyzToLinearRgb(xyzD65[0], xyzD65[1], xyzD65[2]);
+        return linearRgbToHex(lr, lg, lb);
+    }
+    if (spaceLower === 'rec2020') {
+        const lin = [c1, c2, c3].map((c) => lin2020(clamp01(c)));
+        const [x, y, z] = mul3(REC2020_TO_XYZ, lin);
+        const [lr, lg, lb] = xyzToLinearRgb(x, y, z);
+        return linearRgbToHex(lr, lg, lb);
+    }
+    if (spaceLower === 'xyz' || spaceLower === 'xyz-d65') {
+        const [x, y, z] = [c1, c2, c3].map(clamp01);
+        const [lr, lg, lb] = xyzToLinearRgb(x, y, z);
+        return linearRgbToHex(lr, lg, lb);
+    }
+    if (spaceLower === 'xyz-d50') {
+        const xyzD50 = [clamp01(c1), clamp01(c2), clamp01(c3)];
+        const xyzD65 = mul3(D50_TO_D65, xyzD50);
+        const [lr, lg, lb] = xyzToLinearRgb(xyzD65[0], xyzD65[1], xyzD65[2]);
+        return linearRgbToHex(lr, lg, lb);
+    }
+    return '#000000';
+};
+
+const parseColorFunc = (color) => {
+    const inner = color.replace(/color\s*\(/i, '').replace(/\)\s*$/, '').trim();
+    const withoutAlpha = inner.split(/\s*\/\s*/)[0].trim();
+    const tokens = withoutAlpha.split(/[\s,]+/).map((t) => t.trim());
+    if (tokens.length < 4) return '#000000';
+    const space = tokens[0];
+    const parseChan = (s) => {
+        if (!s || s.toLowerCase() === 'none') return 0;
+        const n = parseFloat(s.replace('%', ''));
+        if (isNaN(n)) return 0;
+        return s.includes('%') ? n / 100 : n;
+    };
+    const c1 = parseChan(tokens[1]);
+    const c2 = parseChan(tokens[2]);
+    const c3 = parseChan(tokens[3]);
+    return colorSpaceToHex(space, c1, c2, c3);
+};
+
 const normalizeColor = (color) => {
     if (!color) return '#000000';
 
@@ -407,6 +549,10 @@ const normalizeColor = (color) => {
 
     if (color.startsWith('oklch')) {
         return parseOklch(color);
+    }
+
+    if (color.toLowerCase().startsWith('color(')) {
+        return parseColorFunc(color);
     }
 
     return normalizeColorName(color);
