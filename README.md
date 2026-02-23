@@ -1,1 +1,1 @@
-# React-Native-Normalize-Colors
+# normalize-colors
