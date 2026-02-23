@@ -204,19 +204,166 @@ const hslToHex = (h, s, l) => {
 };
 
 const parseHsl = (color) => {
-    const values = color
-        .replace(/hsla?\(/, '')
-        .replace(')', '')
-        .split(',')
-        .map(v => v.trim().replace('%', ''));
+    const inner = color.replace(/hsla?\(/i, '').replace(/\)\s*$/, '').trim();
+    const values = inner.split(/[\s,/]+/).map((v) => v.trim().replace('%', ''));
 
-    const h = parseInt(values[0]);
-    const s = parseInt(values[1]);
-    const l = parseInt(values[2]);
+    const h = parseFloat(values[0]);
+    const s = parseFloat(values[1]);
+    const l = parseFloat(values[2]);
 
-    if ([h, s, l].some(isNaN)) return '#000000';
+    if ([h, s, l].some((x) => isNaN(x))) return '#000000';
 
     return hslToHex(h % 360, s, l);
+};
+
+// Parse CSS function: "name(v1, v2)" or "name(v1 v2)" -> trimmed values (keep % for detection)
+const parseFuncArgs = (color, prefix) => {
+    const inner = color
+        .replace(new RegExp(`^${prefix}\\(`, 'i'), '')
+        .replace(/\)\s*$/, '')
+        .trim();
+    return inner.split(/[\s,/]+/).map((v) => v.trim());
+};
+
+const hwbToHex = (h, w, b) => {
+    w /= 100;
+    b /= 100;
+    h = (h % 360) / 360;
+    if (w + b >= 1) {
+        const gray = w / (w + b);
+        const v = Math.round(gray * 255);
+        return rgbToHex(v, v, v);
+    }
+    const v = 1 - b;
+    const s = 1 - w / v;
+    const f = (n) => {
+        const k = (n + h * 12) % 12;
+        const a = s * Math.min(k - 3, 9 - k, 1);
+        return Math.max(0, Math.min(1, v - v * a));
+    };
+    const rr = Math.round(f(0) * 255);
+    const gg = Math.round(f(8) * 255);
+    const bb = Math.round(f(4) * 255);
+    return rgbToHex(rr, gg, bb);
+};
+
+const parseHwb = (color) => {
+    const values = parseFuncArgs(color, 'hwb');
+    const h = parseFloat(values[0].replace('%', ''));
+    const w = parseFloat(values[1].replace('%', ''));
+    const b = parseFloat(values[2].replace('%', ''));
+    if ([h, w, b].some((x) => isNaN(x))) return '#000000';
+    return hwbToHex(h, w, b);
+};
+
+// CIE LAB (D65) -> XYZ -> linear sRGB -> sRGB
+const LAB_D65 = { X: 0.95047, Y: 1, Z: 1.08883 };
+const LAB_DELTA = 6 / 29;
+const labInv = (t) => (t > LAB_DELTA ? t * t * t : (t - 4 / 29) * (3 * LAB_DELTA * LAB_DELTA));
+const labToXyz = (L, a, b) => {
+    const fy = (L + 16) / 116;
+    const fx = a / 500 + fy;
+    const fz = fy - b / 200;
+    return [
+        LAB_D65.X * labInv(fx),
+        LAB_D65.Y * labInv(fy),
+        LAB_D65.Z * labInv(fz)
+    ];
+};
+const xyzToLinearRgb = (x, y, z) => [
+    3.2404542 * x - 1.5371385 * y - 0.4985314 * z,
+    -0.969266 * x + 1.8760108 * y + 0.041556 * z,
+    0.0556434 * x - 0.2040259 * y + 1.0572252 * z
+];
+const linearRgbToSrgb = (c) => (c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1 / 2.4) - 0.055);
+const labToHex = (L, a, b) => {
+    const [x, y, z] = labToXyz(L, a, b);
+    const [lr, lg, lb] = xyzToLinearRgb(x, y, z);
+    const r = Math.round(linearRgbToSrgb(lr) * 255);
+    const g = Math.round(linearRgbToSrgb(lg) * 255);
+    const b_ = Math.round(linearRgbToSrgb(lb) * 255);
+    return rgbToHex(
+        Math.max(0, Math.min(255, r)),
+        Math.max(0, Math.min(255, g)),
+        Math.max(0, Math.min(255, b_))
+    );
+};
+
+const lchToLab = (L, C, H) => {
+    const rad = (H * Math.PI) / 180;
+    return [L, C * Math.cos(rad), C * Math.sin(rad)];
+};
+
+const parseLab = (color) => {
+    const values = parseFuncArgs(color, 'lab');
+    const L = parseFloat(values[0].replace('%', ''));
+    const a = parseFloat(values[1].replace('%', ''));
+    const b = parseFloat(values[2].replace('%', ''));
+    if ([L, a, b].some((x) => isNaN(x))) return '#000000';
+    return labToHex(L, a, b);
+};
+
+const parseLch = (color) => {
+    const values = parseFuncArgs(color, 'lch');
+    const L = parseFloat(values[0].replace('%', ''));
+    const C = parseFloat(values[1].replace('%', ''));
+    const H = parseFloat(values[2].replace('%', ''));
+    if ([L, C, H].some((x) => isNaN(x))) return '#000000';
+    const [L_, a, b] = lchToLab(L, C, H);
+    return labToHex(L_, a, b);
+};
+
+// OKLAB -> linear sRGB -> sRGB
+const oklabToLinearRgb = (L, a, b) => {
+    const l_ = L + 0.3963377774 * a + 0.2158037573 * b;
+    const m_ = L - 0.1055613458 * a - 0.0638541728 * b;
+    const s_ = L - 0.0894841775 * a - 1.291485548 * b;
+    const l = l_ * l_ * l_;
+    const m = m_ * m_ * m_;
+    const s = s_ * s_ * s_;
+    return [
+        4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+        -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+        -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s
+    ];
+};
+
+const oklabToHex = (L, a, b) => {
+    const [lr, lg, lb] = oklabToLinearRgb(L, a, b);
+    const r = Math.round(linearRgbToSrgb(lr) * 255);
+    const g = Math.round(linearRgbToSrgb(lg) * 255);
+    const b_ = Math.round(linearRgbToSrgb(lb) * 255);
+    return rgbToHex(
+        Math.max(0, Math.min(255, r)),
+        Math.max(0, Math.min(255, g)),
+        Math.max(0, Math.min(255, b_))
+    );
+};
+
+const oklchToOklab = (L, C, H) => {
+    const rad = (H * Math.PI) / 180;
+    return [L, C * Math.cos(rad), C * Math.sin(rad)];
+};
+
+const parseOklab = (color) => {
+    const values = parseFuncArgs(color, 'oklab');
+    let L = parseFloat(values[0].replace('%', ''));
+    const a = parseFloat(values[1].replace('%', ''));
+    const b = parseFloat(values[2].replace('%', ''));
+    if ([L, a, b].some((x) => isNaN(x))) return '#000000';
+    if (values[0].includes('%')) L /= 100;
+    return oklabToHex(L, a, b);
+};
+
+const parseOklch = (color) => {
+    const values = parseFuncArgs(color, 'oklch');
+    let L = parseFloat(values[0].replace('%', ''));
+    const C = parseFloat(values[1].replace('%', ''));
+    const H = parseFloat(values[2].replace('%', ''));
+    if ([L, C, H].some((x) => isNaN(x))) return '#000000';
+    if (values[0].includes('%')) L /= 100;
+    const [L_, a, b] = oklchToOklab(L, C, H);
+    return oklabToHex(L_, a, b);
 };
 
 const normalizeColor = (color) => {
@@ -240,6 +387,26 @@ const normalizeColor = (color) => {
 
     if (color.startsWith('hsl')) {
         return parseHsl(color);
+    }
+
+    if (color.startsWith('hwb')) {
+        return parseHwb(color);
+    }
+
+    if (color.startsWith('lab')) {
+        return parseLab(color);
+    }
+
+    if (color.startsWith('lch')) {
+        return parseLch(color);
+    }
+
+    if (color.startsWith('oklab')) {
+        return parseOklab(color);
+    }
+
+    if (color.startsWith('oklch')) {
+        return parseOklch(color);
     }
 
     return normalizeColorName(color);
